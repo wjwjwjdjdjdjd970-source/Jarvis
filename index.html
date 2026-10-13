@@ -88,6 +88,7 @@ footer{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:var(-
 #zm .sb{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:8px;background:var(--bg);z-index:2}
 #zm .zs{position:absolute;top:0;left:0;right:0;bottom:0;overflow:auto;padding-top:calc(60px + env(safe-area-inset-top,0px))}
 #zm img{width:200vw;max-width:none;display:block;background:#fff}
+.ans{margin-top:10px;padding-top:8px;border-top:1px solid var(--ln)}
 </style>
 </head>
 <body>
@@ -210,7 +211,7 @@ function offFallback(t){var f=searchLocal(norm(t));return f?"Yapay zekâ kapalı
 function norm(t){return t.toLocaleLowerCase("tr-TR").trim()}
 function core(raw){
   var t=norm(raw),m,d=new Date();
-  if((m=raw.match(/^(?:lütfen\s+)?(?:(?:bunu|şunu)\s+)?(?:hatırla|aklında tut|aklına yaz)\s*[:,]?\s*(.+)$/i))){
+  if((m=raw.match(/^(?:lütfen\s+)?(?:(?:bunu|şunu)\s+)?(?:hatırla(?![a-zçğıöşü])|aklında tut|aklına yaz)\s*[:,]?\s*(.+)$/i))){
     S.facts.push(m[1].trim());if(S.facts.length>50)S.facts.shift();save();return "Not aldım efendim: "+m[1].trim();
   }
   if((m=raw.match(/^(?:benim\s+)?adım\s+(.+)$/i))){
@@ -271,6 +272,7 @@ function core(raw){
     setTimeout(function(){var s="Efendim, süre doldu"+(what?": "+what:".");add("bot",s);speak(s);try{navigator.vibrate&&navigator.vibrate([300,150,300])}catch(x){}},ms);
     return "Tamam, "+n+" "+u+" sonra hatırlatacağım. Sayfanın açık kalması gerekir.";
   }
+  if(/^(lütfen\s+)?hatırlat/.test(t))return "Ne zaman hatırlatayım? Örneğin: '10 dakika sonra su içmeyi hatırlat'.";
   return null;
 }
 function chit(t){
@@ -411,6 +413,7 @@ async function callAI(p,hist,q,onText){
 function errMsg(e){
   var c=e&&e.code;
   if(c==="nosample")return "Claude bağlantısı yok. Sayfayı claude.ai içinden açın ya da Ayarlar'dan başka bir seçenek seçin.";
+  if(c==="novision")return "Sayfayı anlatmak için görsel okuyabilen bir API gerekir (Gemini gibi). Ayarlar'dan seçin.";
   if(c==="nobase")return "Adres girilmemiş. Ayarlardan OpenAI uyumlu adresi yazın.";
   if(c==="nokey")return "API anahtarı girilmemiş. Ayarlar'dan ekleyin.";
   if(c==="not_granted")return "İzin verilmedi. Tekrar denediğinizde izin isteyeceğim.";
@@ -451,10 +454,18 @@ inp.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault(
 }
 
 function apiErr(e){
-  var d="";try{var j=JSON.parse(e.msg);d=(j.error&&(j.error.message||j.error))||j.message||"";if(typeof d!=="string")d=JSON.stringify(d)}catch(x){d=String(e.msg||"")}
-  d=d.replace(/\s+/g," ").slice(0,90);var s=e.status;
-  var t=s===401||s===403?"Anahtar geçersiz veya bu işlem için yetkisiz.":s===402?"Hesapta bakiye veya kredi yok.":s===404?"Model bulunamadı veya kapatılmış. Ayarlar'da 'Modelleri getir' ile güncel olanı seçin.":s===429?"Kota veya kredi doldu, ya da çok hızlı istek yapıldı. Biraz bekleyin veya kredi ekleyin.":s===400?"İstek reddedildi. Anahtarı ve model adını kontrol edin.":s>=500?"Sağlayıcıda geçici bir sorun var, sonra tekrar deneyin.":"API hatası ("+s+").";
-  return t+(d?"\nAyrıntı: "+d:"");
+  var d="",q="",w="";
+  try{
+    var j=JSON.parse(e.msg);if(Array.isArray(j))j=j[0]||{};var er=j.error||j;
+    d=er.message||(typeof er==="string"?er:"")||j.message||"";if(typeof d!=="string")d=JSON.stringify(d);
+    (er.details||[]).forEach(function(x){
+      (x.violations||[]).forEach(function(v){if(!q)q="Model: "+((v.quotaDimensions&&v.quotaDimensions.model)||"?")+", sınır: "+(v.quotaValue!==undefined?v.quotaValue:"?")});
+      if(x.retryDelay&&!w)w="Yaklaşık "+Math.ceil(parseFloat(x.retryDelay))+" saniye sonra tekrar deneyin.";
+    });
+  }catch(x){d=String(e.msg||"")}
+  d=d.replace(/\s+/g," ").slice(0,200);var s=e.status;
+  var t=s===401||s===403?"Anahtar geçersiz veya bu işlem için yetkisiz.":s===402?"Hesapta bakiye veya kredi yok.":s===404?"Model bulunamadı veya kapatılmış. Ayarlar'da 'Modelleri getir' ile güncel olanı seçin.":s===429?"Kota veya kredi doldu, ya da çok hızlı istek yapıldı. Bu model için ücretsiz kotanız olmayabilir; başka bir model deneyin.":s===400?"İstek reddedildi. Anahtarı ve model adını kontrol edin.":s>=500?"Sağlayıcıda geçici bir sorun var, sonra tekrar deneyin.":"API hatası ("+s+").";
+  return t+(q?"\n"+q:"")+(w?"\n"+w:"")+(!q&&d?"\nAyrıntı: "+d:"");
 }
 async function listModels(p,key){
   var res,data,ids=[];
@@ -475,6 +486,31 @@ async function listModels(p,key){
     data=await res.json();ids=(data.data||[]).map(function(m){return m.id});
   }
   return ids.slice(0,80);
+}
+
+async function postJson(url,headers,body){
+  var res=await fetch(url,{method:"POST",headers:headers,body:JSON.stringify(body)});
+  if(!res.ok)throw {status:res.status,msg:await res.text()};
+  return res.json();
+}
+async function callVision(p,q,imgs){
+  if(p==="claude"||p==="offline")throw {code:"novision"};
+  var key=(S.set.k[p]||"").trim();if(!key)throw {code:"nokey"};
+  var model=fixModel(p,S.set.m[p]),d;
+  var sys=sysPrompt()+" Kullanıcı bir ders kitabı sayfasının görüntüsünü gönderdi (Arapça olabilir). Yalnızca görüntüdeki içeriğe dayan, okuyamadığın yeri belirt, bilgi uydurma. Yanıtı Türkçe yaz.";
+  if(p==="gemini"){
+    var parts=imgs.map(function(b){return {inlineData:{mimeType:"image/jpeg",data:b}}});parts.push({text:q});
+    d=await postJson("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(key),{"content-type":"application/json"},{systemInstruction:{parts:[{text:sys}]},contents:[{role:"user",parts:parts}]});
+    var pt=d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts;
+    return (pt||[]).map(function(x){return x.text||""}).join("");
+  }
+  if(p==="anthropic"){
+    d=await postJson("https://api.anthropic.com/v1/messages",{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},{model:model,max_tokens:1500,system:sys,messages:[{role:"user",content:imgs.map(function(b){return {type:"image",source:{type:"base64",media_type:"image/jpeg",data:b}}}).concat([{type:"text",text:q}])}]});
+    return (d.content||[]).map(function(c){return c.text||""}).join("");
+  }
+  var base=(S.set.b[p]||presetOf(p)[2]||"").replace(/\/+$/,"");if(!base)throw {code:"nobase"};
+  d=await postJson(base+"/chat/completions",{"content-type":"application/json","authorization":"Bearer "+key},{model:model,messages:[{role:"system",content:sys},{role:"user",content:imgs.map(function(b){return {type:"image_url",image_url:{url:"data:image/jpeg;base64,"+b}}}).concat([{type:"text",text:q}])}]});
+  return (d.choices&&d.choices[0]&&d.choices[0].message.content)||"";
 }
 
 </script>
@@ -752,32 +788,47 @@ async function showPage(doc,no,body){
   var w=Math.min(1100,Math.max(600,(window.innerWidth||400)*2)),v=pg.getViewport({scale:w/v1.width});
   var cv=document.createElement("canvas");cv.width=Math.round(v.width);cv.height=Math.round(v.height);cv.className="pg";
   await pg.render({canvasContext:cv.getContext("2d"),viewport:v}).promise;
-  cv.onclick=function(){zoomImg(cv)};body.appendChild(cv);scroll();
+  cv.onclick=function(){zoomImg(cv)};body.appendChild(cv);scroll();return cv;
+}
+function visionPrompt(k,name,a,b){
+  var pg=name+" kitabının "+a+(b>a?"-"+b:"")+". sayfa"+(b>a?"ları":"sı")+" ekte. ";
+  if(/çevir/.test(k))return pg+"Sayfadaki Arapça metni Türkçeye çevir. Başlıkları ve maddeleri koru.";
+  if(/özet/.test(k))return pg+"Sayfayı Türkçe, madde madde kısaca özetle.";
+  if(/soru|sınav|test/.test(k))return pg+"Bu sayfadan Türkçe 5 çoktan seçmeli soru hazırla. Cevap anahtarını en sonda ver.";
+  return pg+"Sayfadaki konuyu Türkçe, sade ve adım adım anlat. Önemli terimlerin Arapçasını yanında ver.";
 }
 async function pageCmd(t,c){
   if(!SRCS.length)return false;
-  var n=norm(t),m=n.match(/(\d+)\s*(?:[-–]\s*(\d+))?\s*\.?\s*sayfa/);if(!m)return false;
+  var n=norm(t),m=n.match(/(\d+)\s*(?:[-–]\s*(\d+))?\s*\.?\s*sayfa/)||n.match(/sayfa\s*(\d+)(?:\s*[-–]\s*(\d+))?/);if(!m)return false;
   var src=null;
   SRCS.forEach(function(s){if(n.indexOf(norm(s.name))>-1&&(!src||s.name.length>src.name.length))src=s});
   if(!src&&SRCS.length===1&&n.replace(m[0],"").replace(/[.\s]/g,"")==="")src=SRCS[0];
   if(!src)return false;
+  var kw=/anlat|açıkla|çevir|özet|soru|sınav|test/.exec(n),intent=kw?kw[0]:"";
   var a=+m[1],b=m[2]?+m[2]:a;if(b<a)b=a;
-  var body=add("bot","",Date.now());busy=true;setState("think");
+  var body=add("bot","",Date.now()),ans=null,out="";busy=true;setState("think");
   try{
     var doc=await getDoc(src),first=src.first||1,from=a+first-1,to=b+first-1;
     if(from<1||from>doc.numPages){body.textContent=src.name+" kitabında bu sayfa yok. PDF "+doc.numPages+" sayfa, kitabın ilk sayfası PDF'in "+first+". sayfası olarak ayarlı."}
     else{
-      if(to>doc.numPages)to=doc.numPages;if(to-from>2)to=from+2;
-      body.textContent=src.name+", sayfa "+a+(to>from?"-"+(to-first+1):"")+" (resme dokunun, büyür):";
-      for(var p=from;p<=to;p++)await showPage(doc,p,body);
+      var mx=intent?1:2;if(to>doc.numPages)to=doc.numPages;if(to-from>mx)to=from+mx;
+      body.textContent=src.name+", sayfa "+a+(to>from?"-"+(to-first+1):"")+(intent?":":" (resme dokunun, büyür):");
+      var cvs=[];for(var p=from;p<=to;p++)cvs.push(await showPage(doc,p,body));
+      if(intent){
+        var pv=prov();ans=document.createElement("div");ans.className="ans";ans.textContent=PN[pv]+" okuyor…";body.appendChild(ans);scroll();
+        var imgs=cvs.map(function(cv){return cv.toDataURL("image/jpeg",.8).split(",")[1]});
+        out=((await callVision(pv,visionPrompt(intent,src.name,a,to-first+1),imgs))||"").trim()||"Yanıt alamadım.";
+        renderInto(ans,out);scroll();
+      }
     }
-    commit(c,t,src.name+" sayfa "+a+" gösterildi.");
-  }catch(e){body.textContent=srcErr(e)}
+    commit(c,t,src.name+" sayfa "+a+" gösterildi."+(out?"\n"+out:""));
+    if(out)speak(out);
+  }catch(e){(ans||body).textContent=(e&&(e.status||e.code))?errMsg(e):srcErr(e)}
   busy=false;setState("idle");return true;
 }
 function sourcesPanel(){
   var b=pnHead("Kaynaklar");
-  b.appendChild(mk("div","sm","PDF kitaplarınızı ekleyin. Jarvis, 'Biyoloji 45. sayfa' deyince o sayfanın resmini gösterir. Dosyalar yalnızca bu telefonda saklanır."));
+  b.appendChild(mk("div","sm","PDF kitaplarınızı ekleyin. Jarvis, 'Biyoloji 45. sayfa' deyince o sayfanın resmini gösterir. 'Biyoloji 45. sayfayı Türkçe anlat' (veya çevir, özetle, soru hazırla) derseniz sayfa resmi seçtiğiniz API'ye (Gemini gibi) gönderilip açıklatılır. Dosyalar telefonda saklanır, yalnızca bu isteklerde o sayfanın resmi API'ye gider."));
   b.appendChild(mk("div","lb","Kaynağın adı (Türkçe)"));
   var nm=mk("input","in");nm.type="text";nm.placeholder="Örn. Biyoloji";b.appendChild(nm);
   b.appendChild(mk("div","lb","Kitabın 1. sayfası PDF'in kaçıncı sayfası? (kapak yoksa 1)"));
