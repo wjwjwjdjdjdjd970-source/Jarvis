@@ -1,0 +1,6 @@
+.git
+.wrangler
+wrangler.jsonc
+.gitignore
+.trashed-*
+onizleme-*
